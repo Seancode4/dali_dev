@@ -29,6 +29,12 @@ export class Location {
   reviewScore: number;
   reviewCount: number;
 
+  internalScore: number;
+  type: string;
+  imageCount: number;
+  loadedImage: boolean;
+  imageUrl: string;
+
   constructor(
     name: string,
     position: { lat: number; lng: number },
@@ -39,7 +45,12 @@ export class Location {
     category: string,
     description: string,
     reviewScore: number,
-    reviewCount: number
+    reviewCount: number,
+    internalScore: number,
+    type: string,
+    imageCount: number,
+    loadedImage: boolean,
+    imageUrl: string
   ) {
     this.name = name;
     this.position = position;
@@ -53,6 +64,12 @@ export class Location {
     this.description = description;
     this.reviewScore = reviewScore;
     this.reviewCount = reviewCount;
+
+    this.internalScore = internalScore;
+    this.type = type;
+    this.imageCount = imageCount;
+    this.loadedImage = loadedImage;
+    this.imageUrl = imageUrl;
   }
 }
 
@@ -74,6 +91,12 @@ const MarkerComponent = ({ markers }: { markers: Location[] }) => {
             key={index}
             title={marker.name}
             position={marker.position}
+            opacity={marker.internalScore}
+            icon={{
+              url: `http://maps.google.com/mapfiles/ms/icons/${
+                marker.type == "attractions" ? "blue" : "red"
+              }-pushpin.png`,
+            }}
             onClick={() => setSelectedMarker(marker)}
           />
         ))}
@@ -91,7 +114,14 @@ const MarkerComponent = ({ markers }: { markers: Location[] }) => {
             position={selectedMarker.position}
             onCloseClick={() => setSelectedMarker(null)} // Close InfoWindow
           >
-            <div className="card" cssstyle="width: 18rem;">
+            <div
+              className="card"
+              style={{ maxWidth: "280px" }}
+              cssstyle="width: 18rem;"
+            >
+              {selectedMarker.loadedImage && (
+                <img className="card-img-top" src={selectedMarker.imageUrl} />
+              )}
               <div className="card-body">
                 <h5 className="card-title">{selectedMarker.name}</h5>
                 <h6 className="card-subtitle mb-2 text-body-secondary">
@@ -99,8 +129,11 @@ const MarkerComponent = ({ markers }: { markers: Location[] }) => {
                 </h6>
                 <h6 className="card-subtitle mb-2 text-body-secondary"></h6>
                 <p className="card-text">
-                  {selectedMarker.category}. {selectedMarker.description}
+                  {selectedMarker.category}
+                  {selectedMarker.category != "" ? ". " : ""}
+                  {selectedMarker.distance.toFixed(1)} mile diversion.
                 </p>
+                <p className="card-text">{selectedMarker.description}</p>
                 {/* <a href="#" className="card-link">
                   Get more info
                 </a> */}
@@ -115,8 +148,11 @@ const MarkerComponent = ({ markers }: { markers: Location[] }) => {
     );
   }
 };
-
-const RouteComponent = (route?: { lat: number; lng: number }[]) => {
+const RouteComponent = ({
+  route,
+}: {
+  route?: { lat: number; lng: number }[];
+}) => {
   if (route) {
     return (
       <Polyline
@@ -134,9 +170,28 @@ function GoogleMapComponent({ markers, center, route, zoom }: Props) {
   });
 
   const [map, setMap] = React.useState(null);
+  const [polyline, setPolyline] = React.useState<google.maps.Polyline | null>(
+    null
+  );
 
   useEffect(() => {
-    console.log("Markers updated:", markers);
+    if (map && route) {
+      if (polyline) {
+        polyline.setMap(null);
+      }
+
+      const newPolyline = new google.maps.Polyline({
+        path: route,
+        geodesic: true,
+        strokeColor: "#FF0000",
+        strokeOpacity: 1.0,
+        strokeWeight: 2,
+      });
+
+      newPolyline.setMap(map);
+      setPolyline(newPolyline);
+    }
+    // console.log("Markers updated:", markers);
   }, [markers]); // Logs whenever markers update
 
   const onLoad = React.useCallback(function callback(map) {
@@ -146,6 +201,9 @@ function GoogleMapComponent({ markers, center, route, zoom }: Props) {
 
   const onUnmount = React.useCallback(function callback(map) {
     setMap(null);
+    if (polyline) {
+      polyline.setMap(null);
+    }
   }, []);
 
   return isLoaded ? (
@@ -157,7 +215,7 @@ function GoogleMapComponent({ markers, center, route, zoom }: Props) {
       onUnmount={onUnmount}
     >
       <MarkerComponent markers={markers} />
-      {RouteComponent(route)}
+      {/* <RouteComponent route={route} /> */}
       <></>
     </GoogleMap>
   ) : (

@@ -21,6 +21,8 @@ app.use(cors());
 
 // time based stops
 
+let savedTrips = {};
+
 app.get("/", (req, res) => {
   res.send("hello");
 });
@@ -36,11 +38,16 @@ app.get("/api/route/:origin/:destination", async (req, res) => {
   try {
     encodedPoints = response.data.routes[0].overview_polyline.points;
   } catch {
+    console.log("origin destination failed");
     return;
   }
 
-  // // duration in seconds -> minutes
-  const duration = response.data.routes[0].legs[0].duration.value / 60;
+  // // duration in seconds -> hours
+  const duration = (
+    response.data.routes[0].legs[0].duration.value /
+    60 /
+    60
+  ).toFixed(2);
   // // meters -> miles
   const totalDistance =
     response.data.routes[0].legs[0].distance.value * 0.000621371;
@@ -68,22 +75,27 @@ app.get("/api/route/:origin/:destination", async (req, res) => {
   for (const p of checkpoints) {
     const lat = p[0];
     const long = p[1];
-    const category = "attractions";
-    const radius = 25;
-    const url = `https://api.content.tripadvisor.com/api/v1/location/nearby_search?latLong=${lat}%2C${long}&key=${TRIP_API_KEY}&category=${category}&radius=${radius}&radiusUnit=mi&language=en`;
-    const tripResponse = await axios.get(url);
 
-    output = tripResponse.data.data;
+    locations = locations.concat(
+      await findLocations(lat, long, "attractions,restaurants")
+    );
+    // const category = "attractions";
+    // const radius = 25;
+    // const url = `https://api.content.tripadvisor.com/api/v1/location/nearby_search?latLong=${lat}%2C${long}&key=${TRIP_API_KEY}&category=${category}&radius=${radius}&radiusUnit=mi&language=en`;
+    // const tripResponse = await axios.get(url);
 
-    let maxTemp = 0;
-    for (const poi of output) {
-      if (maxTemp < 6) {
-        locationId = poi["location_id"];
-        distance = poi["distance"];
-        locations.push(await getLocation(locationId, distance));
-        maxTemp += 1;
-      }
-    }
+    // output = tripResponse.data.data;
+
+    // let maxTemp = 0;
+    // for (const poi of output) {
+    //   if (maxTemp < 6) {
+    //     locationId = poi["location_id"];
+    //     distance = poi["distance"] / 60;
+    //     locations.push([locationId, distance]);
+    //     // locations.push(await getLocation(locationId, distance));
+    //     maxTemp += 1;
+    //   }
+    // }
   }
 
   res.json({
@@ -96,21 +108,104 @@ app.get("/api/route/:origin/:destination", async (req, res) => {
   // res.send(checkpoints);
 });
 
+app.get("/api/stop/:lat/:lng/:category", async (req, res) => {
+  const lat = encodeURIComponent(req.params.lat);
+  const lng = encodeURIComponent(req.params.lng);
+  const category = encodeURIComponent(req.params.category);
+
+  res.json({ locations: await findLocations(lat, lng, category) });
+});
+
+// app.get("/api/food/:lat/:lng", async (req, res) => {
+//   const lat = encodeURIComponent(req.params.lat);
+//   const lng = encodeURIComponent(req.params.lng);
+
+//   res.json({ locations: await findLocations(lat, lng, "restaurants") });
+// });
+
+const findLocations = async (lat, long, category) => {
+  const radius = 25;
+  const url = `https://api.content.tripadvisor.com/api/v1/location/nearby_search?latLong=${lat}%2C${long}&key=${TRIP_API_KEY}&category=${category}&radius=${radius}&radiusUnit=mi&language=en`;
+  let tripResponse;
+  try {
+    tripResponse = await axios.get(url);
+  } catch (error) {
+    console.log("find locations failed");
+    console.error(error);
+    return [];
+  }
+
+  output = tripResponse.data.data;
+  let maxTemp = 0;
+  locations = [];
+  for (const poi of output) {
+    if (maxTemp < 6) {
+      locationId = poi["location_id"];
+      distance = poi["distance"];
+      locations.push([locationId, distance, category]);
+      // locations.push(await getLocation(locationId, distance));
+      maxTemp += 1;
+    }
+  }
+  return locations;
+};
+
+// takes in location id and distance, returns location data
+app.get("/api/tripadvisor/:locationId/:distance", async (req, res) => {
+  const locationId = encodeURIComponent(req.params.locationId);
+  const distance = encodeURIComponent(req.params.distance);
+
+  const response = await getLocation(locationId, distance);
+  if (response == -1) {
+    res.json({ success: false });
+  } else {
+    res.json({ success: true, location: response });
+  }
+});
+
+app.post("/api/save/:trip", (req, res) => {
+  const tripCode = encodeURIComponent(req.params.trip);
+  const data = req.body;
+  savedTrips[tripCode] = data;
+  res.send("success");
+});
+
+app.get("/api/load/:trip", (req, res) => {
+  const tripCode = encodeURIComponent(req.params.trip);
+  if (savedTrips[tripCode]) {
+    res.send(savedTrips[tripCode]);
+  } else {
+    console.log(savedTrips);
+    res.send("fail");
+  }
+});
+
 const getLocation = async (locationId, distance) => {
-  // want to get distance from route, name, reviews, what it is (category?), location
   const url = `https://api.content.tripadvisor.com/api/v1/location/${locationId}/details?key=${TRIP_API_KEY}`;
-  const locationResponse = await axios.get(url);
+
+  let locationResponse;
+  try {
+    locationResponse = await axios.get(url);
+  } catch (error) {
+    console.error(error);
+    console.log("find location failed");
+    return -1;
+  }
 
   let hasRequired = true;
 
   // require what??
-  const required = ["name", "ancestors", "num_reviews", "groups"];
+  // const required = ["name", "ancestors", "num_reviews"];
+  // for (const i in required) {
+  //   if (locationResponse.data.hasOwnProperty(required[i])) {
+  //     console.log(required[i]);
+  //     hasRequired = false;
+  //   }
+  // }
 
-  for (const i in required) {
-    if (!locationResponse.data.hasOwnProperty(required[i])) {
-      console.log(required[i]);
-      hasRequired = false;
-    }
+  let type = "attractions";
+  if (locationResponse.data.hasOwnProperty("cuisine")) {
+    type = "restaurants";
   }
 
   const round = (x) => {
@@ -123,10 +218,22 @@ const getLocation = async (locationId, distance) => {
     location.distance = round(distance);
     location.city = locationResponse.data["ancestors"][0]["name"];
     location.state = locationResponse.data["ancestors"][1]["name"];
-    location.category =
-      locationResponse.data["groups"][0]["categories"][0]["localized_name"] ??
-      "";
+    try {
+      if (location.type == "attractions") {
+        location.category =
+          locationResponse.data["groups"][0]["categories"][0]["localized_name"];
+      } else {
+        location.category =
+          locationResponse.data["cuisine"][0]["localized_name"];
+      }
+    } catch {
+      location.category = "";
+    }
     location.description = locationResponse.data["description"] ?? "";
+
+    if (location.description.length > 150) {
+      location.description = location.description.substring(0, 150) + "...";
+    }
 
     location.position = {
       lat: parseFloat(locationResponse.data["latitude"]),
@@ -134,6 +241,7 @@ const getLocation = async (locationId, distance) => {
     };
 
     location.reviewCount = locationResponse.data["num_reviews"];
+    location.imageCount = locationResponse.data["photo_count"];
 
     // reviewscore
     if (location.reviewCount == 0) {
@@ -149,9 +257,44 @@ const getLocation = async (locationId, distance) => {
         location.reviewCount;
     }
     location.reviewScore = location.reviewScore.toFixed(2);
+
+    // internal score max would be 5 + 1 - 0 + 1
+    location.internalScore =
+      parseFloat(location.reviewScore) + parseFloat(location.distance) / 10;
+    // (parseInt(location.imageCount) > 0 ? 1 : 0);
+
+    location.internalScore = Math.max(
+      0,
+      Math.min(1, location.internalScore / 5)
+    );
+
+    // 3x difference in score
+    location.internalScore = Math.max(
+      0,
+      1 - (1 - location.internalScore) * 3 - 0.1
+    );
+
+    if (location.internalScore > 0.6 && location.imageCount > 0) {
+      const img = `https://api.content.tripadvisor.com/api/v1/location/${locationId}/photos?key=${TRIP_API_KEY}&language=en&limit=1`;
+      try {
+        const imageResponse = await axios.get(img);
+        imageUrl = imageResponse.data.data[0].images.small.url;
+        location.imageUrl = imageUrl;
+        location.loadedImage = true;
+        location.internalScore = Math.min(1, location.internalScore + 0.1);
+      } catch (error) {
+        console.error(error);
+        location.imageUrl = "";
+        console.log("could not get image");
+      }
+    }
+
+    location.type = type;
+    // console.log(location);
     return location;
   } else {
     console.log("missing data");
+    console.log(locationResponse.data);
   }
   // let location = Location();
   // location.name = locationResponse.data["name"];
@@ -171,6 +314,10 @@ class Location {
   long = 0;
   reviewScore = 0;
   reviewCount = 0;
+  internalScore = 0;
+  type = "";
+  imageCount = 0;
+  loadedImage = false;
 }
 
 /// JUNK:
